@@ -263,8 +263,7 @@ google-sheets-lead-email-automation-cn/
         ├── 09-sheet-status-sent.png
         ├── 10-gmail-sent-preview.png
         ├── 11-create-trigger.png
-        ├── 12-trigger-list.png
-        └── 13-final-overview.png
+        └── 12-trigger-list.png
 ```
 
 截图文件已经预留。  
@@ -740,8 +739,6 @@ Apps Script 自动读取新线索
 ```text
 assets/screenshots/13-final-overview.png
 ```
-
-![步骤 13：最终效果总览](assets/screenshots/13-final-overview.png)
 
 ---
 
