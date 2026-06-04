@@ -717,78 +717,7 @@ Google 账号每天可发送邮件数量有限。
 
 ---
 
-## 十二、GitHub 信息建议
-
-### 仓库名
-
-```text
-google-sheets-lead-email-automation-cn
-```
-
-### 仓库描述
-
-```text
-使用 Google Sheets 和 Google Apps Script 自动读取客户线索，并将线索邮件发送到指定客户邮箱。
-```
-
-### Topics
-
-```text
-google-sheets
-google-apps-script
-gmail
-email-automation
-lead-management
-facebook-leads
-crm
-automation
-javascript
-business-workflow
-```
-
-### Commit 标题
-
-```text
-新增 Google 表格客户线索邮件自动通知流程
-```
-
-### Commit 描述
-
-```text
-- 新增 Google Sheets 客户线索邮件自动通知说明文档
-- 新增 Apps Script 自动发送线索邮件代码
-- 说明表格字段、customer_email 接收邮箱和发送状态字段
-- 补充从实现原理到正式启用的完整操作步骤
-- 预留每一步操作截图，方便后续上传 GitHub 作为记录
-```
-
-### Release 标题
-
-```text
-v1.0.0 - Google 表格客户线索邮件自动通知
-```
-
-### Release 描述
-
-```text
-首次发布 Google 表格客户线索邮件自动通知流程。
-
-本版本包含一套完整的 Google Sheets + Google Apps Script 实现方案，可自动读取 Google 表格中的客户线索数据，并将线索内容发送到 customer_email 字段指定的邮箱。
-
-主要功能：
-- 读取 Google 表格客户线索数据
-- 将每条未发送线索发送到 customer_email
-- 自动生成结构化 HTML 邮件
-- 自动写入 email_send_status、email_sent_time、email_error_message
-- 通过 Sent 状态避免重复发送
-- 提供测试函数，每次只发送一条线索
-- 提供 5 分钟定时触发器，用于正式自动发送
-- 提供完整 README 文档和每一步截图占位图
-```
-
----
-
-## 十三、最终效果
+## 十二、最终效果
 
 本项目完成后，整体效果如下：
 
@@ -816,7 +745,7 @@ assets/screenshots/13-final-overview.png
 
 ---
 
-## 十四、文件说明
+## 十三、文件说明
 
 | 文件 | 说明 |
 |---|---|
