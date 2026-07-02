@@ -1,15 +1,26 @@
 # 截图命名说明
 
-- `01-sheet-overview.png`：步骤 01：表格整体结构预览。展示原始广告线索表格、主要字段和多条客户数据。
-- `02-customer-email-column.png`：步骤 02：新增 customer_email 接收邮箱列。展示 customer_email 字段及接收线索的邮箱地址。
-- `03-open-apps-script.png`：步骤 03：从 Google 表格打开 Apps Script。路径：扩展程序 → Apps Script。
-- `04-paste-code.png`：步骤 04：粘贴 Apps Script 代码。展示 Code.gs 中粘贴的完整脚本代码。
-- `05-save-project.png`：步骤 05：保存 Apps Script 项目。展示保存按钮和项目名称。
-- `06-run-test-function.png`：步骤 06：运行测试函数。函数选择：testSendFirstLeadToCustomerEmail。
-- `07-authorize-script.png`：步骤 07：首次运行授权。展示 Google 授权流程。
-- `08-execution-log-success.png`：步骤 08：执行日志发送成功。日志应显示：Lead info sent to: customer_email。
-- `09-sheet-status-sent.png`：步骤 09：表格自动写入发送状态。展示 email_send_status、email_sent_time、email_error_message。
-- `10-gmail-sent-preview.png`：步骤 10：Gmail 已发送邮件预览。展示邮件标题、收件人和线索详情。
-- `11-create-trigger.png`：步骤 11：创建定时触发器。函数：createAutoSendLeadTriggerEvery5Minutes。
-- `12-trigger-list.png`：步骤 12：触发器列表确认。展示每 5 分钟自动运行的触发器。
-- `13-final-overview.png`：步骤 13：最终效果总览。汇总表格、日志、邮件和自动触发器。
+| 文件名 | 说明 |
+|---|---|
+| `01-sheet-overview.png` | Google 表格整体结构和客户线索数据预览 |
+| `02-customer-email-column.png` | `customer_email` 接收邮箱字段 |
+| `03-open-apps-script.png` | 从“扩展程序”打开 Apps Script |
+| `04-paste-code.png` | 在 Apps Script 中粘贴完整代码 |
+| `05-save-project.png` | 保存 Apps Script 项目 |
+| `06-run-test-function.png` | 运行 `testSendFirstLeadToCustomerEmail` |
+| `07-authorize-script.png` | 第一次运行时完成 Google 权限授权 |
+| `08-execution-log-success.png` | 原版执行日志成功示例 |
+| `09-sheet-status-sent.png` | 表格自动写入发送状态和时间 |
+| `10-gmail-sent-preview.png` | Gmail 通知邮件预览 |
+| `11-create-trigger.png` | 运行自动触发器创建函数 |
+| `12-trigger-list.png` | Apps Script 触发器列表 |
+| `13-missing-column-error.png` | `Missing required columns: customer_email` 错误示例 |
+| `14-fixed-execution-log.png` | 使用工作表 gid 修复后的成功日志 |
+| `15-email-fields.png` | 邮件正文中发送的 6 个字段位置 |
+
+## 截图维护建议
+
+- 公开仓库前，应对真实邮箱、电话、地址和客户姓名进行打码；
+- 替换截图时保持文件名不变，README 中的图片链接即可继续使用；
+- 截图应尽量保留关键菜单、函数名称、字段名和日志结果；
+- 不要在截图中暴露不必要的账号信息或客户隐私。
