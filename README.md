@@ -330,13 +330,21 @@ src/Code.gs
 
 ```javascript
 const CONFIG = {
-  SPREADSHEET_ID: '你的表格ID',
-  SHEET_ID: 你的工作表gid,
+  // Google 表格 ID：URL 中 /d/ 与 /edit 之间的内容
+  SPREADSHEET_ID: '1tC4jW9Sy-Euer9F1VZRLxBuvIzrMXmo1d3u0xQOx_9s',
+  // 目标工作表 gid：URL 中 gid= 后面的数字
+  SHEET_ID: 579167497,
+  // 每次执行最多发送多少封邮件
   MAX_SEND_PER_RUN: 20,
+  // 发件人显示名称
   SENDER_NAME: 'Customer Enquiries',
+  // 邮件标题前缀
   EMAIL_SUBJECT_PREFIX: 'New Customer Enquiry',
+  // 邮件正文标题
   EMAIL_HEADING: 'New Customer Enquiry',
-  REPLY_TO: '你的固定业务回复邮箱'
+  // 可选固定回复邮箱；留空时不显式设置 replyTo，避免额外用户邮箱权限依赖
+  // 如确需指定回复邮箱，请填写固定业务邮箱，例如：'sales@example.com'
+  REPLY_TO: 'chinabarefoot@gmail.com'
 };
 ```
 
