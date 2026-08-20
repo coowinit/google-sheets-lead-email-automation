@@ -1,194 +1,201 @@
 # Google 表格客户线索邮件自动通知系统
 
-> 当前版本：**v1.1.0**  
+> 当前版本：**v1.1.2**  
+> 更新日期：**2026-08-20**  
 > 技术组合：**Google Sheets + Google Apps Script + Gmail**
 
-本项目用于把 Google 表格中的新客户线索，自动整理成邮件并发送到指定的业务邮箱，同时在表格中记录发送状态，避免重复通知。
+本项目用于把 Google 表格中的新客户线索自动整理为邮件，并发送到指定业务邮箱，同时在表格中记录发送状态、发送时间和错误信息，避免重复通知。
 
-当前版本已经结合实际使用中遇到的问题完成优化，重点解决了：
+v1.1.2 是一次以**稳定性和长期维护**为目标的修复版本，重点解决了实际运行中出现的两个问题：
 
-- 脚本读取到错误工作表，导致 `Missing required columns: customer_email`；
-- 表头存在空格、BOM 或零宽字符时无法识别；
-- 测试邮件被 Gmail 归入垃圾邮件；
-- 邮件正文包含过多无关字段；
-- 手动测试和定时触发器同时运行时可能重复发送；
-- Gmail 当日发送额度不足时缺少明确提示。
+- Apps Script 读取错误标签页，导致真实业务数据没有进入发送流程；
+- `Session.getEffectiveUser().getEmail()` 需要额外的 `userinfo.email` 权限，导致多条线索被标记为 `Failed`。
+
+当前版本已经移除对 `Session.getEffectiveUser()` 的依赖，并改用可选的固定 `REPLY_TO` 配置；同时修复了测试函数在“第一条发送失败”时继续尝试后续记录的问题。
 
 ---
 
 ## 目录
 
-- [一、项目功能](#一项目功能)
-- [二、运行流程](#二运行流程)
-- [三、当前邮件字段](#三当前邮件字段)
-- [四、字段与邮箱的区别](#四字段与邮箱的区别)
+- [一、系统目标与适用范围](#一系统目标与适用范围)
+- [二、系统架构与运行流程](#二系统架构与运行流程)
+- [三、表格字段说明](#三表格字段说明)
+- [四、三个邮箱概念必须区分](#四三个邮箱概念必须区分)
 - [五、项目目录](#五项目目录)
-- [六、部署前准备](#六部署前准备)
-- [七、完整安装步骤](#七完整安装步骤)
+- [六、部署前检查](#六部署前检查)
+- [七、完整部署步骤](#七完整部署步骤)
 - [八、核心配置说明](#八核心配置说明)
-- [九、发送状态与防重复机制](#九发送状态与防重复机制)
-- [十、如何修改邮件字段](#十如何修改邮件字段)
-- [十一、常见错误与排查](#十一常见错误与排查)
-- [十二、邮件进入垃圾箱的处理](#十二邮件进入垃圾箱的处理)
-- [十三、自动触发器管理](#十三自动触发器管理)
-- [十四、安全与隐私建议](#十四安全与隐私建议)
-- [十五、实战问题复盘](#十五实战问题复盘)
-- [十六、版本更新记录](#十六版本更新记录)
+- [九、发送状态与重试机制](#九发送状态与重试机制)
+- [十、测试与上线流程](#十测试与上线流程)
+- [十一、自动触发器管理](#十一自动触发器管理)
+- [十二、常见错误与排查](#十二常见错误与排查)
+- [十三、v1.1.2 故障复盘](#十三v112-故障复盘)
+- [十四、安全与公开仓库注意事项](#十四安全与公开仓库注意事项)
+- [十五、长期维护原则](#十五长期维护原则)
+- [十六、版本记录](#十六版本记录)
 - [十七、文件说明](#十七文件说明)
+- [十八、快速复用清单](#十八快速复用清单)
 
 ---
 
-## 一、项目功能
+## 一、系统目标与适用范围
 
-本系统适用于以下场景：
+### 1. 系统目标
+
+系统只负责一件事：
+
+```text
+新客户线索进入 Google Sheets
+        ↓
+Apps Script 定时扫描
+        ↓
+找到尚未成功发送的记录
+        ↓
+生成客户线索通知邮件
+        ↓
+发送到 customer_email
+        ↓
+回写 Sent / Failed、发送时间和错误信息
+```
+
+### 2. 适用场景
 
 - Facebook / Instagram 广告表单线索通知；
-- Google 表格客户询盘自动提醒；
+- Google 表格客户询盘提醒；
 - 销售人员或代理商线索分发；
-- 小规模 CRM 邮件通知；
-- 每日少量或中等数量客户线索自动转发。
+- 每日少量或中等数量的内部业务通知；
+- 小规模 CRM 前置通知流程。
 
-当前脚本具备以下功能：
+### 3. 不适合的场景
 
-1. 通过 `SPREADSHEET_ID` 和工作表 `gid` 精确读取目标工作表；
-2. 自动识别第一行字段名；
-3. 读取 `customer_email` 列中的第一个非空邮箱；
-4. 把每一条未发送线索整理成 HTML 邮件；
-5. 发送成功后写入 `Sent`；
-6. 记录发送时间；
-7. 记录单条线索的错误信息；
-8. 已发送记录不会重复发送；
-9. 支持单条测试；
-10. 支持每 5 分钟自动运行；
-11. 使用脚本锁防止并发重复发送；
-12. 自动检查 Gmail 当日剩余发送额度；
-13. 自动清理表头中的空格、BOM 和零宽字符。
-
-### 不适合的场景
-
-本项目是内部业务通知工具，不适合作为营销群发平台。
+本项目是内部业务通知工具，不是营销群发平台。
 
 | 场景 | 建议 |
 |---|---|
 | 每天几十条线索 | 适合 |
-| 每天上百条线索 | 需要关注 Gmail 配额 |
+| 每天上百条线索 | 需要关注 Gmail / Apps Script 配额 |
 | 内部销售通知 | 适合 |
 | 批量营销邮件 | 不建议 |
-| 需要退订、追踪和营销统计 | 建议使用专业邮件服务 |
+| 需要退订、追踪、营销统计 | 建议使用专业邮件服务 |
 
 ---
 
-## 二、运行流程
+## 二、系统架构与运行流程
 
-```text
-广告或表单产生客户线索
-        ↓
-线索写入 Google 表格
-        ↓
-Apps Script 定时扫描表格
-        ↓
-跳过 email_send_status = Sent 的记录
-        ↓
-读取 customer_email 作为通知接收邮箱
-        ↓
-提取 6 个客户字段并生成邮件
-        ↓
-通过 Gmail 发送通知
-        ↓
-回写 Sent、发送时间或错误信息
-```
-
-### 参与组件
+### 1. 参与组件
 
 | 组件 | 作用 |
 |---|---|
-| Google Sheets | 保存客户线索和发送状态 |
-| Google Apps Script | 读取数据、生成邮件、发送邮件 |
-| Gmail | 实际发出通知邮件 |
-| 时间触发器 | 每 5 分钟自动执行脚本 |
+| Google Sheets | 保存客户线索、接收邮箱和发送状态 |
+| Google Apps Script | 读取数据、生成邮件、发送邮件、回写状态 |
+| Gmail / MailApp | 实际发出通知邮件 |
+| 时间触发器 | 每 5 分钟运行一次主发送函数 |
+| LockService | 防止手动运行与定时触发器并发导致重复发送 |
 
-邮件会从**授权并运行 Apps Script 的 Google 账号**发出。
+### 2. 完整流程
+
+```text
+广告 / 表单产生客户线索
+        ↓
+线索写入 Google 表格
+        ↓
+Apps Script 每 5 分钟执行
+        ↓
+按 SPREADSHEET_ID + SHEET_ID 精确找到标签页
+        ↓
+检查表头和必要字段
+        ↓
+读取第一个非空 customer_email
+        ↓
+跳过 email_send_status = Sent 的记录
+        ↓
+提取 6 个客户字段
+        ↓
+生成 HTML + 纯文本邮件
+        ↓
+MailApp.sendEmail()
+        ↓
+成功：写入 Sent + 时间
+失败：写入 Failed + 错误信息
+```
+
+邮件从**授权并运行 Apps Script 的 Google 账号**发出。
 
 ---
 
-## 三、当前邮件字段
+## 三、表格字段说明
 
-当前邮件正文只发送以下 6 个字段：
+### 1. 邮件正文中的 6 个客户字段
 
 | 表格字段 | 邮件显示名称 | 用途 |
 |---|---|---|
-| `business_type` | 客户类型 | 例如 homeowner |
-| `requirements` | 客户需求 | 客户填写的具体需求 |
-| `full_name` | 客户姓名 | 线索姓名 |
-| `phone_number` | 联系电话 | 客户联系电话 |
-| `email` | 客户邮箱 | 线索客户自己的邮箱 |
-| `street_address` | 客户地址 | 客户地址 |
+| `business_type` | Business Type | 客户类型 |
+| `requirements` | Requirements | 客户需求 |
+| `full_name` | Full Name | 客户姓名 |
+| `phone_number` | Phone Number | 联系电话 |
+| `email` | Email Address | 客户自己的邮箱 |
+| `street_address` | Street Address | 客户地址 |
 
 字段位置示例：
 
-![邮件中发送的字段](assets/screenshots/15-email-fields.png)
+![邮件字段](assets/screenshots/15-email-fields.png)
 
-### 邮件标题示例
-
-```text
-新客户询盘通知｜Warren Wink｜homeowner
-```
-
-### 邮件正文示例
+### 2. 必须存在的业务字段
 
 ```text
-新客户询盘
-
-客户类型：homeowner
-客户需求：111aaa
-客户姓名：Warren Wink
-联系电话：+61428290116
-客户邮箱：warren@example.com
-客户地址：1689 Sandy Creek Road
+business_type
+requirements
+full_name
+phone_number
+email
+street_address
+customer_email
 ```
 
-字段为空时，HTML 邮件中会显示：
+### 3. 脚本使用的状态字段
 
 ```text
--
+email_send_status
+email_sent_time
+email_error_message
 ```
+
+如果缺少这 3 个状态字段，脚本会自动追加到表格末尾。
+
+不要随意改名，否则脚本将无法正确判断发送状态。
 
 ---
 
-## 四、字段与邮箱的区别
+## 四、三个邮箱概念必须区分
 
-这是本项目中最容易混淆的地方。
+这是本项目最容易混淆的地方。
 
-| 字段 | 含义 |
-|---|---|
-| `email` | 线索客户自己的邮箱，显示在邮件正文中 |
-| `customer_email` | 接收线索通知的业务邮箱，不显示在正文中 |
+| 项目 | 含义 | 来源 |
+|---|---|---|
+| `email` | 线索客户自己的邮箱，只显示在通知正文中 | Google 表格 |
+| `customer_email` | 真正接收客户线索通知的业务邮箱 | Google 表格 |
+| `CONFIG.REPLY_TO` | 收到通知后点击“回复”时使用的回复地址 | Apps Script 配置 |
 
-系统的实际逻辑是：
+系统实际发送关系：
 
 ```text
-读取客户的 email、电话、姓名等信息
+客户 email / 姓名 / 电话 / 地址等
         ↓
-统一发送到 customer_email
+整理成通知邮件
+        ↓
+发送到 customer_email
+        ↓
+如果设置了 REPLY_TO
+点击“回复”时回复到该固定邮箱
 ```
 
-### `customer_email` 的填写方式
+### `customer_email` 的规则
 
-如果所有线索都发送到同一个邮箱，可以只在该列填写一个有效邮箱。
+当前版本会从上到下查找 `customer_email` 列，并使用**第一个非空邮箱**作为统一通知接收邮箱。
 
-脚本会从上到下查找 `customer_email` 列，并使用第一个非空邮箱作为统一接收邮箱。
+因此，如果整个标签页只应该发送到一个业务邮箱，建议该列只保留一个有效接收地址，避免历史旧邮箱优先被读取。
 
-例如：
-
-```text
-customer_email
-coowinvip@gmail.com
-
-
-
-```
-
-> 当前版本不是“每一行发给不同邮箱”的模式。如果以后需要按行分配不同收件人，需要调整接收邮箱逻辑。
+> 当前版本不是“每一行发送到不同邮箱”的分发模式。
 
 ---
 
@@ -223,54 +230,46 @@ google-sheets-lead-email-automation/
         └── README-screenshots.md
 ```
 
----
+### 本次结构调整
 
-## 六、部署前准备
+旧仓库中存在多份中英文脚本副本，其中旧脚本仍包含已经确认会触发权限错误的 `Session.getEffectiveUser()` 调用。
 
-部署前确认以下内容：
-
-- 已有一个 Google 表格；
-- 第一行是字段名；
-- 表格中存在当前脚本需要的 7 个业务字段；
-- 已准备一个接收通知的邮箱；
-- 当前 Google 账号有权访问该表格；
-- 当前 Google 账号可以使用 Gmail 发信。
-
-### 必须存在的字段
+v1.1.2 将脚本统一为：
 
 ```text
-business_type
-requirements
-full_name
-phone_number
-email
-street_address
-customer_email
+src/Code.gs
+src/Code.txt
 ```
 
-### 脚本自动新增的字段
-
-首次运行时，脚本会自动在表格末尾新增：
-
-```text
-email_send_status
-email_sent_time
-email_error_message
-```
-
-不要手动把这些字段改名，否则脚本可能无法判断发送状态。
+两份内容保持一致，避免以后误复制旧版本。
 
 ---
 
-## 七、完整安装步骤
+## 六、部署前检查
 
-### 步骤 1：检查 Google 表格
+部署前确认：
 
-第一行必须是字段名，第二行开始才是数据。
+- Google 表格第一行是字段名；
+- 第二行开始才是客户数据；
+- 7 个业务字段完整存在；
+- `customer_email` 中至少有一个有效接收邮箱；
+- 当前 Google 账号有权访问目标表格；
+- 当前 Google 账号可以使用 Gmail / MailApp 发信；
+- `SPREADSHEET_ID` 正确；
+- `SHEET_ID` 与真正业务标签页 URL 中的 `gid` 一致；
+- 正式上线前先运行单条测试，不要直接恢复批量触发器。
+
+---
+
+## 七、完整部署步骤
+
+### 步骤 1：确认 Google 表格结构
+
+第一行必须为字段名。
 
 ![表格整体结构](assets/screenshots/01-sheet-overview.png)
 
-重点确认：
+重点检查：
 
 ```text
 business_type
@@ -282,243 +281,173 @@ street_address
 customer_email
 ```
 
-字段名必须和代码配置一致。
+### 步骤 2：确认通知接收邮箱
 
----
-
-### 步骤 2：设置通知接收邮箱
-
-在表格中新增或确认：
-
-```text
-customer_email
-```
-
-然后填写接收线索通知的邮箱。
+`customer_email` 是业务通知邮箱，不是客户自己的 `email`。
 
 ![customer_email 字段](assets/screenshots/02-customer-email-column.png)
 
-注意：
+### 步骤 3：获取 Spreadsheet ID 与工作表 gid
 
-- `email` 是客户邮箱；
-- `customer_email` 是业务通知邮箱；
-- 两者不能混用。
-
----
-
-### 步骤 3：获取表格 ID 和工作表 gid
-
-Google 表格地址通常类似：
+Google 表格 URL 通常类似：
 
 ```text
 https://docs.google.com/spreadsheets/d/表格ID/edit?gid=工作表gid
 ```
 
-例如：
+对应：
 
-```text
-https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOp/edit?gid=579167497
+```javascript
+SPREADSHEET_ID: '表格ID',
+SHEET_ID: 工作表gid,
 ```
 
-对应关系：
-
-```text
-SPREADSHEET_ID = 1AbCdEfGhIjKlMnOp
-SHEET_ID       = 579167497
-```
-
-其中：
-
-- `SPREADSHEET_ID` 用于定位整个 Google 表格文件；
-- `SHEET_ID` 使用 URL 中的 `gid`，用于定位具体标签页。
-
-使用 `SHEET_ID` 的原因是：
-
-> 同一个 Google 表格文件可能有多个标签页。只读取第一个标签页，很容易读错工作表。
-
----
+`SHEET_ID` 是数字，不加引号。
 
 ### 步骤 4：打开 Apps Script
 
-在 Google 表格菜单中点击：
-
 ```text
-扩展程序 → Apps Script
+Google 表格 → 扩展程序 → Apps Script
 ```
 
 ![打开 Apps Script](assets/screenshots/03-open-apps-script.png)
 
----
+### 步骤 5：复制最新版代码
 
-### 步骤 5：复制代码
-
-删除 Apps Script 编辑器中的默认代码，然后复制：
+复制：
 
 ```text
 src/Code.gs
 ```
 
+到 Apps Script 编辑器中。
+
 ![粘贴代码](assets/screenshots/04-paste-code.png)
 
-修改顶部配置：
+### 步骤 6：检查 CONFIG
+
+至少检查：
 
 ```javascript
 const CONFIG = {
   SPREADSHEET_ID: '你的表格ID',
   SHEET_ID: 你的工作表gid,
-
   MAX_SEND_PER_RUN: 20,
-  SENDER_NAME: '昆州客户线索通知',
-  EMAIL_SUBJECT_PREFIX: '新客户询盘通知',
-  EMAIL_HEADING: '新客户询盘'
+  SENDER_NAME: 'Customer Enquiries',
+  EMAIL_SUBJECT_PREFIX: 'New Customer Enquiry',
+  EMAIL_HEADING: 'New Customer Enquiry',
+  REPLY_TO: '你的固定业务回复邮箱'
 };
 ```
 
-`SHEET_ID` 是数字，不需要引号：
+如果不需要指定回复地址：
 
 ```javascript
-SHEET_ID: 579167497
+REPLY_TO: '',
 ```
 
----
+**不要再使用：**
 
-### 步骤 6：保存 Apps Script 项目
-
-点击顶部保存按钮。
-
-建议项目名称：
-
-```text
-Google 表格客户线索邮件自动通知
+```javascript
+Session.getEffectiveUser().getEmail()
 ```
+
+来动态生成 `replyTo`。
+
+### 步骤 7：保存项目
 
 ![保存项目](assets/screenshots/05-save-project.png)
 
----
+### 步骤 8：先检查目标工作表
 
-### 步骤 7：先运行表头调试函数
-
-第一次部署时，建议先选择并运行：
+运行：
 
 ```javascript
 debugTargetSheetHeaders
 ```
 
-执行日志应显示：
+日志应确认：
 
 ```text
-工作表名称：目标标签页名称
-工作表 gid：579167497
-表头字段：["id","created_time",...,"customer_email"]
+Sheet name: 真正业务标签页名称
+Sheet gid: 与 URL 中 gid 完全一致
+Headers: 包含 customer_email 及全部业务字段
 ```
 
-这一步可以提前确认：
+### 步骤 9：运行单条测试
 
-- 是否读取到了正确的标签页；
-- `gid` 是否正确；
-- 字段名是否存在；
-- 表头是否有拼写问题。
-
----
-
-### 步骤 8：运行单条测试
-
-在函数下拉框选择：
+运行：
 
 ```javascript
 testSendFirstLeadToCustomerEmail
 ```
 
-然后点击“运行”。
-
 ![运行测试函数](assets/screenshots/06-run-test-function.png)
 
-该函数每次只发送第一条尚未标记为 `Sent` 的记录。
+v1.1.2 中，该函数只会尝试第一条尚未标记为 `Sent` 的有效记录。
 
----
+即使这一条失败，也不会继续把后面的记录批量标记为 `Failed`。
 
-### 步骤 9：完成首次授权
+### 步骤 10：首次授权
 
-第一次运行时，Google 会要求授权。
-
-一般流程：
-
-```text
-查看权限
-→ 选择 Google 账号
-→ 高级
-→ 转到项目
-→ 允许
-```
+第一次运行可能需要 Google 授权。
 
 ![首次授权](assets/screenshots/07-authorize-script.png)
 
-脚本需要以下权限：
+脚本核心需要：
 
 - 读取和修改目标 Google 表格；
 - 通过当前账号发送邮件；
 - 创建和管理 Apps Script 触发器。
 
----
+v1.1.2 不再为了读取当前用户邮箱而依赖 `Session.getEffectiveUser()`。
 
-### 步骤 10：查看执行日志
+### 步骤 11：检查执行日志
 
-成功日志类似：
+正确日志应类似：
 
 ```text
-目标工作表：昆州客户自动群发表 | gid：579167497
-通知接收邮箱：coowinvip@gmail.com
-第 2 行发送成功，接收邮箱：coowinvip@gmail.com
-本次共发送：1 封邮件
-执行完毕
+Target sheet: 昆州客户自动群发表 | gid: 579167497
+Notification recipient: example@example.com
+Row 55 sent successfully. Recipient: example@example.com
+Total attempted this run: 1. Total emails sent this run: 1.
 ```
 
-![执行日志成功](assets/screenshots/14-fixed-execution-log.png)
+### 步骤 12：检查表格状态
 
-原项目中的成功日志截图：
-
-![执行日志](assets/screenshots/08-execution-log-success.png)
-
----
-
-### 步骤 11：检查表格状态
-
-发送成功后，当前行会写入：
+成功：
 
 ```text
 email_send_status = Sent
-email_sent_time   = 实际发送时间
+email_sent_time = 实际发送时间
 email_error_message = 空
+```
+
+失败：
+
+```text
+email_send_status = Failed
+email_sent_time = 空
+email_error_message = 具体错误
 ```
 
 ![发送状态](assets/screenshots/09-sheet-status-sent.png)
 
-发送失败时：
+### 步骤 13：检查邮件
 
-```text
-email_send_status = Failed
-email_error_message = 具体错误原因
-```
+确认：
 
----
-
-### 步骤 12：检查收到的邮件
-
-确认以下内容：
-
-- 收件人是 `customer_email`；
-- 标题包含客户姓名和客户类型；
-- 正文只显示 6 个指定字段；
-- 客户电话、邮箱和地址格式正常；
-- 邮件未进入垃圾箱。
+- 收件人来自 `customer_email`；
+- 邮件标题包含客户姓名和客户类型；
+- 正文只包含 6 个指定字段；
+- 点击回复时，若配置 `REPLY_TO`，回复地址正确；
+- 邮件没有进入垃圾邮件。
 
 ![邮件预览](assets/screenshots/10-gmail-sent-preview.png)
 
----
+### 步骤 14：恢复自动触发器
 
-### 步骤 13：创建自动触发器
-
-测试成功后，运行一次：
+单条测试完全正常后，再运行一次：
 
 ```javascript
 createAutoSendLeadTriggerEvery5Minutes
@@ -526,7 +455,7 @@ createAutoSendLeadTriggerEvery5Minutes
 
 ![创建触发器](assets/screenshots/11-create-trigger.png)
 
-然后进入 Apps Script 左侧“触发器”，确认存在：
+触发器应为：
 
 ```text
 函数：sendLeadInfoToCustomerEmail
@@ -540,462 +469,166 @@ createAutoSendLeadTriggerEvery5Minutes
 
 ## 八、核心配置说明
 
-### 1. 表格文件 ID
+### `SPREADSHEET_ID`
+
+定位整个 Google 表格文件。
 
 ```javascript
-SPREADSHEET_ID: '你的表格ID'
+SPREADSHEET_ID: '...'
 ```
 
-来自 URL 中：
+### `SHEET_ID`
 
-```text
-/d/ 与 /edit 之间
-```
-
----
-
-### 2. 工作表 gid
+定位真正业务标签页。
 
 ```javascript
 SHEET_ID: 579167497
 ```
 
-来自 URL 中：
+本项目不再使用：
 
-```text
-gid=579167497
+```javascript
+ss.getSheets()[0]
 ```
 
-当前版本通过 `SHEET_ID` 精确定位标签页，不再默认读取第一个工作表。
+来默认读取第一个标签页。
 
----
-
-### 3. 每次发送数量
+### `MAX_SEND_PER_RUN`
 
 ```javascript
 MAX_SEND_PER_RUN: 20
 ```
 
-表示每次脚本最多发送 20 条未发送线索。
+正常自动任务每次最多成功发送 20 封。
 
-测试函数会临时将其改为 1，结束后自动恢复。
-
----
-
-### 4. 发件人显示名称
+### `SENDER_NAME`
 
 ```javascript
-SENDER_NAME: '昆州客户线索通知'
+SENDER_NAME: 'Customer Enquiries'
 ```
 
-建议使用真实、明确、容易识别的名称。
+这是收件箱中看到的发件人显示名称。
 
-不建议使用过于通用的名称，例如：
-
-```text
-Lead Notification
-System Mail
-No Reply
-```
-
----
-
-### 5. 邮件标题前缀
+### `EMAIL_SUBJECT_PREFIX`
 
 ```javascript
-EMAIL_SUBJECT_PREFIX: '新客户询盘通知'
+EMAIL_SUBJECT_PREFIX: 'New Customer Enquiry'
 ```
 
-最终标题由以下部分组成：
+最终标题示例：
 
 ```text
-标题前缀｜客户姓名｜客户类型
+New Customer Enquiry | Warren Wink | homeowner
 ```
 
----
-
-### 6. 邮件正文标题
+### `EMAIL_HEADING`
 
 ```javascript
-EMAIL_HEADING: '新客户询盘'
+EMAIL_HEADING: 'New Customer Enquiry'
 ```
 
-这是 HTML 邮件顶部显示的主标题。
+用于 HTML 和纯文本正文标题。
+
+### `REPLY_TO`
+
+```javascript
+REPLY_TO: 'your-business-email@example.com'
+```
+
+这是可选固定回复邮箱。
+
+如果留空：
+
+```javascript
+REPLY_TO: ''
+```
+
+脚本不会设置 `replyTo`，也不会读取当前 Google 用户邮箱。
 
 ---
 
-## 九、发送状态与防重复机制
+## 九、发送状态与重试机制
 
-脚本通过以下字段判断是否重复发送：
-
-```text
-email_send_status
-```
-
-只要当前行状态是：
-
-```text
-Sent
-```
-
-脚本就会跳过这一行。
-
-### 状态说明
+### 状态含义
 
 | 状态 | 含义 |
 |---|---|
-| 空白 | 尚未发送 |
-| `Sent` | 已成功发送 |
-| `Failed` | 上次发送失败，可在下一次继续尝试 |
+| 空白 | 尚未成功发送 |
+| `Sent` | 已成功发送，以后跳过 |
+| `Failed` | 上次失败，后续仍会继续尝试 |
 
-当前逻辑只跳过 `Sent`，因此 `Failed` 记录在后续运行时会再次尝试发送。
+当前代码只有 `Sent` 会被跳过。
 
-### 如何重新测试某一行
+因此故障修复后，原来已经标记为 `Failed` 的记录**无需手工清空状态**，下一次运行会自动重新尝试。
 
-清空该行的：
+### 防重复机制
 
-```text
-email_send_status
-```
-
-然后重新运行测试函数即可。
-
-为了让状态更整洁，也可以同时清空：
-
-```text
-email_sent_time
-email_error_message
-```
-
-> 清空 `Sent` 会使该记录重新发送，请避免误操作。
-
-### 并发保护
-
-脚本使用：
+主函数使用：
 
 ```javascript
 LockService.getScriptLock()
 ```
 
-防止以下情况同时发生：
+防止：
 
-- 手动点击运行；
-- 定时触发器正在执行；
-- 两次触发器运行时间重叠。
+- 手动运行与定时触发器重叠；
+- 两次定时触发器同时运行；
+- 并发情况下重复发送同一记录。
 
-这样可以降低重复发送风险。
+### 测试模式
 
----
+v1.1.2 的测试函数不再临时修改 `CONFIG.MAX_SEND_PER_RUN`，而是通过独立的 `testMode` 控制流程。
 
-## 十、如何修改邮件字段
-
-当前字段配置位于：
-
-```javascript
-COL_BUSINESS_TYPE: 'business_type',
-COL_REQUIREMENTS: 'requirements',
-COL_FULL_NAME: 'full_name',
-COL_PHONE: 'phone_number',
-COL_LEAD_EMAIL: 'email',
-COL_ADDRESS: 'street_address'
-```
-
-### 修改字段时需要同步检查 4 个位置
-
-1. `CONFIG` 中的字段名；
-2. `validateRequiredColumns_()` 中的必需字段列表；
-3. `extractLeadData_()` 中的数据提取；
-4. HTML 和纯文本邮件生成函数。
-
-对应函数：
-
-```javascript
-extractLeadData_()
-buildLeadEmailHtml_()
-buildLeadEmailText_()
-```
-
-### 只改邮件显示名称
-
-例如把“客户地址”改成“项目地址”，只需修改：
-
-```javascript
-buildHtmlFieldRow_('项目地址', address)
-```
-
-和：
-
-```javascript
-'项目地址：' + (lead.address || '-')
-```
-
-### 新增一个字段
-
-例如新增 `lead_status`，需要：
-
-```javascript
-COL_LEAD_STATUS: 'lead_status'
-```
-
-然后在 `extractLeadData_()`、HTML 邮件和纯文本邮件中同步增加。
-
-不要只在 `CONFIG` 中新增字段，否则邮件正文不会自动显示。
-
----
-
-## 十一、常见错误与排查
-
-### 1. 报错：Missing required columns: customer_email
-
-错误示例：
+测试模式规则：
 
 ```text
-Error: Missing required columns: customer_email
+找到第一条有效且未 Sent 的记录
+        ↓
+只尝试这一条
+        ↓
+成功或失败都立即停止
 ```
 
-![缺少字段报错](assets/screenshots/13-missing-column-error.png)
+这避免了旧版本“第一条失败后继续尝试下一条”的问题。
 
-即使表格页面上能看到 `customer_email`，脚本仍可能报错。
+---
 
-#### 最常见原因：读错工作表
+## 十、测试与上线流程
 
-旧版逻辑可能使用：
-
-```javascript
-return ss.getSheets()[0];
-```
-
-这表示始终读取第一个标签页。
-
-如果当前数据在第二个或其他标签页，脚本读取的表头里就没有 `customer_email`。
-
-#### 当前修复方式
-
-使用 URL 中的 `gid` 精确定位：
-
-```javascript
-SHEET_ID: 579167497
-```
-
-并通过：
-
-```javascript
-item.getSheetId() === CONFIG.SHEET_ID
-```
-
-找到目标标签页。
-
-#### 排查步骤
-
-先运行：
-
-```javascript
-debugTargetSheetHeaders
-```
-
-检查日志中的：
+推荐固定使用以下顺序：
 
 ```text
-工作表名称
-工作表 gid
-表头字段
+1. 保存代码
+2. debugTargetSheetHeaders
+3. 检查 Sheet name / gid / Headers
+4. testSendFirstLeadToCustomerEmail
+5. 确认只尝试 1 条
+6. 确认邮件收到
+7. 确认表格写入 Sent
+8. 再创建或恢复 5 分钟触发器
 ```
 
-只要日志中的 `gid` 不等于 URL 中的 `gid`，就说明读取错了工作表。
+不建议在未知故障状态下直接运行主函数或直接恢复自动触发器，因为可能存在积压的 `Failed` 记录。
 
 ---
 
-### 2. 页面能看到字段，但脚本仍提示缺少字段
+## 十一、自动触发器管理
 
-可能是字段中存在肉眼看不到的字符，例如：
+### 创建 / 重建 5 分钟触发器
 
-- 首尾空格；
-- BOM；
-- 零宽空格；
-- 从其他系统复制过来的隐藏字符。
-
-当前代码会自动执行：
-
-```javascript
-normalizeHeader_()
-```
-
-清理这些字符。
-
-仍有问题时，可以：
-
-1. 双击表头单元格；
-2. 删除原内容；
-3. 手动重新输入字段名；
-4. 再运行 `debugTargetSheetHeaders`。
-
----
-
-### 3. 报错：customer_email 列中没有找到接收邮箱
-
-说明表头存在，但该列没有任何非空邮箱。
-
-检查：
-
-- 是否在 `customer_email` 列填写了邮箱；
-- 是否填写在正确的工作表；
-- 是否存在多余空格；
-- 是否被公式返回为空字符串。
-
----
-
-### 4. 报错：customer_email 邮箱格式无效
-
-示例：
-
-```text
-customer_email 邮箱格式无效：coowinvip@gmail
-```
-
-正确格式应类似：
-
-```text
-coowinvip@gmail.com
-```
-
----
-
-### 5. 测试函数每次发送下一条记录
-
-这是正常行为。
-
-```javascript
-testSendFirstLeadToCustomerEmail
-```
-
-每次只发送第一条尚未标记为 `Sent` 的记录。
-
-第一条发送后成为 `Sent`，下一次运行会自动处理下一条。
-
----
-
-### 6. 邮件没有发送，但脚本没有整体报错
-
-查看该行：
-
-```text
-email_send_status
-email_error_message
-```
-
-单条发送失败时，脚本会把该行标记为：
-
-```text
-Failed
-```
-
-并记录具体错误。
-
----
-
-### 7. 当日发送额度不足
-
-当前代码会先执行：
-
-```javascript
-MailApp.getRemainingDailyQuota()
-```
-
-如果额度已经用完，会提示：
-
-```text
-当前账号今天的邮件发送额度已经用完。
-```
-
-减少 `MAX_SEND_PER_RUN` 不能恢复当日额度，只能等待额度恢复或更换适合的发信方案。
-
----
-
-### 8. 自动触发器没有运行
-
-检查：
-
-- 是否运行过 `createAutoSendLeadTriggerEvery5Minutes`；
-- Apps Script 左侧是否存在触发器；
-- 触发器是否有失败记录；
-- 授权账号是否仍有表格和 Gmail 权限；
-- 表格 ID 或 gid 是否后来发生变化；
-- 是否修改过函数名称。
-
----
-
-### 9. 修改代码后仍像在运行旧版本
-
-可能原因：
-
-- 没有保存；
-- 函数下拉框仍选择旧测试函数；
-- 项目中保留了同名旧函数；
-- 触发器仍指向旧函数。
-
-建议：
-
-1. 保存代码；
-2. 检查是否有重复函数；
-3. 删除旧触发器；
-4. 重新创建触发器。
-
----
-
-## 十二、邮件进入垃圾箱的处理
-
-脚本成功发送不代表邮件一定进入收件箱。首次使用自动通知系统时，Gmail 可能把模板化邮件归入垃圾邮件。
-
-### 本项目实际有效的调整
-
-将：
-
-```javascript
-SENDER_NAME: 'Lead Notification'
-EMAIL_SUBJECT_PREFIX: 'New Customer Lead'
-```
-
-改为更明确的业务名称：
-
-```javascript
-SENDER_NAME: '昆州客户线索通知'
-EMAIL_SUBJECT_PREFIX: '新客户询盘通知'
-```
-
-修改后，邮件识别度更高，也更符合真实业务通知场景。
-
-### 建议操作
-
-1. 在垃圾邮件中点击“不是垃圾邮件”；
-2. 将发件账号加入通讯录；
-3. 使用真实、稳定的发件人显示名称；
-4. 避免短时间重复发送大量完全相同的测试邮件；
-5. 邮件标题不要过于夸张或像营销群发；
-6. 邮件正文保留明确的业务来源；
-7. 使用长期稳定的业务账号发送；
-8. 企业域名邮箱应检查自己的邮件认证配置。
-
-当前邮件底部已经明确说明：
-
-```text
-本邮件由昆州客户线索通知系统自动发送，请及时处理。
-```
-
-这有助于收件人理解邮件来源。
-
----
-
-## 十三、自动触发器管理
-
-### 创建每 5 分钟触发器
-
-只运行一次：
+运行一次：
 
 ```javascript
 createAutoSendLeadTriggerEvery5Minutes
 ```
 
-该函数会先删除同名旧触发器，再创建新的触发器，防止重复创建。
+该函数会先删除所有指向：
+
+```javascript
+sendLeadInfoToCustomerEmail
+```
+
+的旧触发器，然后重新创建一个 5 分钟触发器，避免重复创建。
 
 ### 停止自动发送
 
@@ -1005,23 +638,257 @@ createAutoSendLeadTriggerEvery5Minutes
 deleteAutoSendLeadTriggers
 ```
 
-也可以进入 Apps Script 左侧“触发器”页面手动删除。
+或者在 Apps Script 左侧“触发器”页面手动删除。
 
-### 是否需要一直打开电脑或浏览器
+### 是否需要打开电脑
 
 不需要。
 
-触发器创建成功后，任务运行在 Google Apps Script 云端。电脑关闭、浏览器关闭，不影响定时执行。
+触发器运行在 Google Apps Script 云端，浏览器和电脑关闭后仍会继续执行。
 
 ---
 
-## 十四、安全与隐私建议
+## 十二、常见错误与排查
 
-### 1. 不要公开客户数据
+### 1. `Missing required columns: customer_email`
 
-表格中可能包含：
+常见原因：
 
-- 姓名；
+- 读取错标签页；
+- `SHEET_ID` 不正确；
+- 表头拼写错误；
+- 表头中存在空格、BOM 或零宽字符。
+
+![字段缺失错误](assets/screenshots/13-missing-column-error.png)
+
+排查：
+
+```javascript
+debugTargetSheetHeaders
+```
+
+确认日志里的 `Sheet gid` 与浏览器 URL 中 `gid=` 后面的数字一致。
+
+当前代码会自动运行 `normalizeHeader_()` 清理 BOM、零宽字符和首尾空格。
+
+### 2. 脚本执行成功，但 `Total emails sent this run: 0`
+
+检查：
+
+- 是否读取到了真正业务标签页；
+- 新线索是否已经是 `Sent`；
+- 是否有有效客户字段；
+- 是否真的存在待处理的新记录。
+
+### 3. `customer_email` 没有找到
+
+检查：
+
+- `customer_email` 表头是否存在；
+- 该列是否至少有一个非空邮箱；
+- 是否填写在正确标签页；
+- 是否被公式返回为空字符串。
+
+### 4. `Invalid customer_email address`
+
+确保格式类似：
+
+```text
+name@example.com
+```
+
+### 5. `Invalid REPLY_TO address`
+
+检查 `CONFIG.REPLY_TO`。
+
+不需要 Reply-To 时直接设置：
+
+```javascript
+REPLY_TO: '',
+```
+
+### 6. `You do not have permission to call Session.getEffectiveUser`
+
+这是 v1.1.0 / 旧脚本中已经确认的故障。
+
+典型错误：
+
+```text
+You do not have permission to call Session.getEffectiveUser.
+Required permissions: https://www.googleapis.com/auth/userinfo.email
+```
+
+原因是旧代码使用：
+
+```javascript
+Session.getEffectiveUser().getEmail()
+```
+
+读取当前 Google 用户邮箱并作为 `replyTo`。
+
+**v1.1.2 已彻底移除该调用。**
+
+正确方式是：
+
+```javascript
+REPLY_TO: '固定业务邮箱'
+```
+
+或者：
+
+```javascript
+REPLY_TO: ''
+```
+
+### 7. 多条记录突然全部变成 `Failed`
+
+如果旧测试函数在第一条发送失败后继续遍历，因为 `sentCount` 没有增加，它可能继续尝试后面的记录。
+
+v1.1.2 已修复：
+
+```text
+测试函数 = 无论成功或失败，只尝试第一条有效待发送记录
+```
+
+### 8. Gmail 当日发送额度不足
+
+代码会检查：
+
+```javascript
+MailApp.getRemainingDailyQuota()
+```
+
+额度耗尽时会停止，并给出明确错误。
+
+### 9. 自动触发器没有运行
+
+检查：
+
+- Apps Script 左侧是否存在触发器；
+- 执行记录中是否有失败；
+- 授权账号是否仍有表格和 Gmail 权限；
+- `SPREADSHEET_ID` / `SHEET_ID` 是否变化；
+- 是否修改过主函数名称；
+- 是否仍在运行旧脚本项目。
+
+### 10. 修改代码后仍像旧版本
+
+检查：
+
+- 是否保存；
+- 项目内是否仍有旧的同名函数；
+- 是否复制错旧脚本文件；
+- 触发器是否指向正确主函数。
+
+v1.1.2 仓库已经只保留 `Code.gs` / `Code.txt` 两个等价副本，减少版本混淆。
+
+---
+
+## 十三、v1.1.2 故障复盘
+
+### 故障 A：脚本读取“测试自动发送”，真实业务表没有发送
+
+实际业务标签页：
+
+```text
+昆州客户自动群发表
+```
+
+实际业务 gid：
+
+```text
+579167497
+```
+
+故障排查中发现脚本曾经运行在另一个测试标签页，因此日志虽然显示“执行完成”，却没有处理真正的新客户数据。
+
+修复原则：
+
+```text
+永远使用 SPREADSHEET_ID + SHEET_ID 精确定位
+```
+
+并在改动后先运行：
+
+```javascript
+debugTargetSheetHeaders
+```
+
+### 故障 B：切回真实业务表后，多条记录变成 `Failed`
+
+错误日志：
+
+```text
+You do not have permission to call Session.getEffectiveUser.
+Required permissions: https://www.googleapis.com/auth/userinfo.email
+```
+
+错误链：
+
+```text
+找到待发送客户
+        ↓
+生成邮件
+        ↓
+读取 Session.getEffectiveUser().getEmail()
+        ↓
+缺少 userinfo.email 权限
+        ↓
+当前记录 Failed
+```
+
+### 为什么不采用“继续增加权限”的方案
+
+可选方案有两个：
+
+1. 增加 `userinfo.email` 授权，继续读取当前用户邮箱；
+2. 删除不必要的 Session 依赖，使用固定可选 `REPLY_TO`。
+
+本项目选择第二种。
+
+原因：
+
+- Reply-To 不是核心业务逻辑；
+- 固定业务邮箱更容易维护；
+- 避免因为账号、授权变化导致触发器再次失败；
+- 自动触发器执行时不能依赖交互式授权流程；
+- 架构更简单：Sheets → MailApp，而不是 Sheets → Session/OAuth → MailApp。
+
+### 故障 C：测试模式连续标记多条 Failed
+
+旧测试逻辑通过临时把：
+
+```javascript
+CONFIG.MAX_SEND_PER_RUN = 1
+```
+
+来限制测试数量。
+
+但 `MAX_SEND_PER_RUN` 实际限制的是“成功发送数量”。
+
+如果第一条失败：
+
+```text
+sentCount 仍然是 0
+```
+
+循环会继续尝试后面的记录。
+
+v1.1.2 改为独立 `testMode`：
+
+```text
+attemptedCount >= 1 → 立即停止
+```
+
+因此测试函数真正实现“只尝试一条”。
+
+---
+
+## 十四、安全与公开仓库注意事项
+
+表格可能包含：
+
+- 客户姓名；
 - 电话；
 - 邮箱；
 - 地址；
@@ -1029,156 +896,114 @@ deleteAutoSendLeadTriggers
 
 建议：
 
-- 表格保持私有；
-- 仅授权必要人员访问；
-- 不要把真实数据截图提交到公开仓库；
-- README 截图中的电话、邮箱和地址应打码。
+- Google 表格保持私有；
+- 只授权必要人员；
+- GitHub 截图中的真实客户信息必须打码；
+- 公开仓库前检查 `SPREADSHEET_ID`；
+- 公开仓库前检查 `SHEET_ID`；
+- 公开仓库前检查 `REPLY_TO` 是否允许公开；
+- 公开仓库前检查 `src/Google-Sheets-test-URL.txt`；
+- 不要把 OAuth token、密码、API 密钥或账号凭证写入仓库。
 
-### 2. 公开 GitHub 仓库前检查配置
+> Spreadsheet ID 本身不等于访问权限，但没有必要时仍不建议公开真实业务配置。
 
-公开仓库前，建议检查：
+---
 
-```javascript
-SPREADSHEET_ID
-SHEET_ID
-SENDER_NAME
-```
+## 十五、长期维护原则
 
-并检查：
+### 1. 先保持架构简单
+
+核心依赖保持为：
 
 ```text
-src/Google-Sheets-test-URL.txt
+Google Sheets
+    ↓
+Apps Script
+    ↓
+MailApp / Gmail
 ```
 
-虽然表格 ID 本身不等于访问权限，但不建议在公开仓库中保留真实业务地址。
+不要为了一个可选功能引入额外账号权限依赖。
 
-### 3. 使用业务专用账号
+### 2. 配置集中在 `CONFIG`
 
-建议使用专门的业务 Google 账号运行脚本，避免：
+以后修改：
 
-- 员工离职后权限丢失；
-- 个人邮箱和业务通知混杂；
-- 后期无法统一管理触发器和发件记录。
+- 表格 ID；
+- gid；
+- 发件人名称；
+- 邮件标题；
+- Reply-To；
+- 每次发送数量；
 
-### 4. 定期检查触发器失败记录
+优先从 `CONFIG` 修改，不要把业务配置散落到多个函数。
 
-建议定期进入 Apps Script：
+### 3. 不再保留多份功能重复的脚本
+
+仓库只维护：
+
+```text
+Code.gs
+Code.txt
+```
+
+两者内容一致。
+
+Git 历史已经可以保存旧版本，不需要在当前目录继续保留可能误用的旧脚本。
+
+### 4. 出现故障先看执行记录
+
+推荐顺序：
 
 ```text
 执行记录
-触发器
+→ Target sheet / gid
+→ Headers
+→ Notification recipient
+→ Failed error_message
+→ Gmail 配额
+→ 触发器
 ```
 
-检查是否存在连续失败。
+不要第一时间重写代码。
 
 ---
 
-## 十五、实战问题复盘
+## 十六、版本记录
 
-### 问题 1：表格明明有 customer_email，脚本却报缺少字段
+### v1.1.2 - 2026-08-20
 
-现象：
+- 修复真实业务标签页定位问题，确认使用正确 `SHEET_ID`；
+- 移除 `Session.getEffectiveUser().getEmail()`；
+- 修复 `userinfo.email` 权限不足导致批量 `Failed`；
+- 新增可选固定 `CONFIG.REPLY_TO`；
+- 修复测试函数失败后继续尝试后续记录的问题；
+- 测试模式改为独立 `testMode` + `attemptedCount`；
+- 日志同时输出尝试数量和成功数量；
+- 保留 `Failed` 自动重试机制；
+- 统一仓库代码为 `src/Code.gs` 和 `src/Code.txt`；
+- 删除当前目录中仍包含旧权限逻辑的重复脚本副本；
+- 重写 README 的部署、排错、故障复盘与长期维护说明。
 
-```text
-Missing required columns: customer_email
-```
-
-真正原因：
-
-> 脚本读取了同一个 Google 表格文件中的错误标签页。
-
-旧版配置把 `SHEET_NAME` 留空后，默认读取第一个工作表：
-
-```javascript
-ss.getSheets()[0]
-```
-
-而实际线索数据位于 `gid=579167497` 的标签页。
-
-最终修复：
-
-- 改为 `SHEET_ID`；
-- 根据 `getSheetId()` 精确匹配；
-- 新增 `debugTargetSheetHeaders()`；
-- 自动清理隐藏表头字符。
-
-修复后的日志：
-
-![修复后的执行日志](assets/screenshots/14-fixed-execution-log.png)
-
----
-
-### 问题 2：邮件发送成功，但进入垃圾箱
-
-现象：
-
-- Apps Script 日志显示发送成功；
-- 收件邮箱能收到；
-- 但邮件位于垃圾邮件。
-
-调整：
-
-```javascript
-SENDER_NAME: '昆州客户线索通知'
-EMAIL_SUBJECT_PREFIX: '新客户询盘通知'
-```
-
-结果：
-
-> 使用明确、真实的业务名称和标题后，后续测试邮件不再进入垃圾箱。
-
----
-
-### 问题 3：邮件正文包含的字段不符合实际需求
-
-最终确认只发送：
-
-```text
-business_type
-requirements
-full_name
-phone_number
-email
-street_address
-```
-
-同时保留：
-
-```text
-customer_email
-```
-
-仅作为收件地址，不显示在正文中。
-
----
-
-## 十六、版本更新记录
-
-### v1.1.0
+### v1.1.0 - 2026-07-02
 
 - 通过工作表 `gid` 精确定位目标标签页；
 - 修复 `Missing required columns: customer_email`；
-- 新增 `debugTargetSheetHeaders()` 调试函数；
+- 新增 `debugTargetSheetHeaders()`；
 - 增加表头空格、BOM 和零宽字符清理；
 - 邮件正文精简为 6 个指定字段；
-- 新增 `requirements` 客户需求字段；
-- 更新中文 HTML 邮件样式；
-- 优化发件人名称和邮件标题；
-- 使用对象参数调用 `MailApp.sendEmail()`；
-- 增加有效 `replyTo`；
-- 增加每日剩余邮件额度检查；
-- 一次性读取表格数据，减少 API 调用；
-- 增加脚本锁，降低重复发送风险；
-- 完善中文日志、错误提示和代码注释；
-- 新增真实问题排查和垃圾邮件处理说明。
+- 新增 `requirements` 字段；
+- 增加 Gmail 剩余额度检查；
+- 增加脚本锁；
+- 增加发送状态、错误日志和 HTML 邮件。
 
 ### v1.0.0
 
-- 完成 Google 表格客户线索读取；
+- 完成 Google Sheets 客户线索读取；
 - 支持发送到 `customer_email`；
-- 支持写入发送状态；
+- 支持状态、时间和错误记录；
 - 支持单条测试；
-- 支持每 5 分钟自动触发。
+- 支持每 5 分钟定时执行。
 
 ---
 
@@ -1186,29 +1011,34 @@ customer_email
 
 | 文件 | 说明 |
 |---|---|
-| `README.md` | 完整安装、配置、排错和维护指南 |
-| `CHANGELOG.md` | 版本变更记录 |
-| `src/Code.gs` | 可直接复制到 Apps Script 的完整代码 |
-| `src/Code.txt` | 便于普通文本编辑器打开的代码副本 |
-| `src/Google-Sheets-test-URL.txt` | 当前测试表格地址，公开仓库前应检查 |
-| `assets/screenshots/` | 安装步骤、错误和修复效果截图 |
+| `README.md` | 当前完整安装、配置、故障复盘和维护文档 |
+| `CHANGELOG.md` | 版本更新记录 |
+| `src/Code.gs` | **当前唯一推荐复制到 Apps Script 的完整代码** |
+| `src/Code.txt` | 与 `Code.gs` 内容完全相同，方便普通文本编辑器查看 |
+| `src/Google-Sheets-test-URL.txt` | 测试表格地址；公开仓库前必须复核 |
+| `assets/screenshots/` | 原安装步骤、历史错误和修复截图 |
 | `assets/screenshots/README-screenshots.md` | 截图命名说明 |
 
 ---
 
-## 快速复用清单
+## 十八、快速复用清单
 
-在新项目中复用时，按以下顺序操作：
+按顺序操作：
 
 1. 复制 `src/Code.gs`；
-2. 修改 `SPREADSHEET_ID`；
-3. 修改 `SHEET_ID`；
-4. 核对 7 个必要字段；
-5. 填写 `customer_email`；
-6. 运行 `debugTargetSheetHeaders`；
-7. 运行 `testSendFirstLeadToCustomerEmail`；
-8. 检查邮件和 `Sent` 状态；
-9. 运行 `createAutoSendLeadTriggerEvery5Minutes`；
-10. 定期查看执行记录和触发器状态。
+2. 修改或确认 `SPREADSHEET_ID`；
+3. 修改或确认 `SHEET_ID`；
+4. 修改或确认 `REPLY_TO`；
+5. 核对 7 个业务字段；
+6. 检查 `customer_email`；
+7. 运行 `debugTargetSheetHeaders`；
+8. 确认目标工作表名称和 gid；
+9. 运行 `testSendFirstLeadToCustomerEmail`；
+10. 确认 `Total attempted this run: 1`；
+11. 确认 `Total emails sent this run: 1`；
+12. 检查邮件实际到达；
+13. 检查对应行变为 `Sent`；
+14. 最后运行 `createAutoSendLeadTriggerEvery5Minutes`；
+15. 定期查看 Apps Script“执行记录”和“触发器”。
 
-至此，Google 表格客户线索邮件自动通知系统即可稳定运行。
+至此，系统即可恢复为稳定的自动客户线索邮件通知流程。
